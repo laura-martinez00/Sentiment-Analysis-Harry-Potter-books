@@ -1,0 +1,1673 @@
+---
+title: "Text mining on Harry Potter Books"
+author: "Laura Martinez"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+## Introduction:
+
+Created by the creative mind of **J.K. Rowling**, the magical world of Harry Potter has captured the attention of readers all over the world with its vibrant characters, tight plots, and rich narrative fabric. The saga, which spans seven books and eight film adaptations, chronicles the adventures of a young wizard named Harry Potter as he battles the powerful dark forces of the wizarding world and navigates the turbulent worlds of magic, friendship, and destiny.
+
+Beginning with "Harry Potter and the Philosopher's Stone" and ending with "Harry Potter and the Deathly Hallows," the series explores themes of courage, love, and the never-ending conflict between good and evil. Readers and viewers are introduced to many memorable characters in addition to Harry, such as the mysterious Albus Dumbledore, the devoted Ron Weasley, and the unwavering Hermione Granger.
+
+Through the use of a variety of analytical techniques, I hope to uncover hidden themes, patterns, and insights within the text as I delve deeper into the literary and cinematic realms of the Harry Potter saga on this text mining journey. I strive to reveal the underlying structures and subtleties that add to the enduring magic of Rowling's masterpiece and to solve the mysteries and magic of Harry Potter through the lens of text mining through natural language processing, sentiment analysis, and topic modeling.
+
+Lastly, my initial guess or **hypothesis** is that I will oberve a decline in positive sentiment as the series goes on, as I believe it becomes more dramatic.
+
+### Preparing the necessary tools
+
+The first thing that should be done in order to start with this analysis is to load the libraries and import the data, which is inside the a package named "harrypotter" which contains the whole script of each of the seven J.K. Rowling books:
+
+```{r}
+#install/update the library that contains the harry potter books data
+if (packageVersion("devtools") < 1.6) {
+  install.packages("devtools")
+}
+
+devtools::install_github("bradleyboehmke/harrypotter")
+
+```
+
+```{r}
+library(stringr)      # String manipulation functions
+library(gridExtra)    # Arrange multiple grid-based plots on one page
+library(harrypotter)  # Provides access to text data related to Harry Potter series
+library(tidyverse)    # Collection of packages for data manipulation and visualization (including dplyr, ggplot2, tidyr, etc.)
+library(tidytext)     # Text mining and analysis using tidy principles
+library(tibble)       # Provides data frames with more modern features
+library(tm)           # Text mining framework for R (DMTs)
+library(ggplot2)      # Data visualization package
+library(scales)       # Provides tools for scaling plots and axes
+library(textdata)     # Access to text datasets
+library(RColorBrewer) # Color palettes for creating attractive graphics
+library(wordcloud)    # Create word clouds from text data
+library(reshape2)     # Reshape and aggregate data
+library(forcats)      # Tools for working with factors
+library(igraph)       # Network analysis and visualization (n-grams)
+library(quanteda)     # Quantitative analysis of textual data (corpus)
+library(topicmodels)  # To do topic modelling
+```
+
+Each text/book is in a character vector in which each element representing a single chapter.
+
+For example:
+
+```{r}
+str(prisoner_of_azkaban)
+```
+
+This book has 22 chapters
+
+### Cleaning the text
+
+#### Creating a tibble, separating by chapter and tokenizing
+
+Now we need to create a function to convert Harry Potter novels into a tibble that has one word by chapter by book.
+
+```{r}
+# Creating vectors to store book titles and their corresponding texts:
+book_titles <- c("Philosopher's Stone", "Chamber of Secrets", "Prisoner of Azkaban","Goblet of Fire", "Order of the Phoenix", "Half-Blood Prince","Deathly Hallows")
+
+books <- list(philosophers_stone, chamber_of_secrets, prisoner_of_azkaban,goblet_of_fire, order_of_the_phoenix, half_blood_prince,deathly_hallows)
+
+# Creating an empty tibble:
+harry_potter_books <- tibble()
+
+# Looping through the book titles
+for(i in seq_along(book_titles)) {
+        
+        #saving the cleaned text in the "clean" dataset
+        # Each chapter is represented as a different element inside the vector, so the way to access it is book[chapter]
+        clean <- tibble(chapter = seq_along(books[[i]]),
+                        text = books[[i]]) |> 
+          #tokenize the text into words.   
+          unnest_tokens(word, text) |> 
+             #assign book titles
+             mutate(book = book_titles[i]) |> 
+             #first column is the book
+             select(book, everything())
+        #stack the books together in rows
+        harry_potter_books <- rbind(harry_potter_books, clean)
+}
+
+# Set levels for the books according to their order of publication
+harry_potter_books$book <- factor(harry_potter_books$book, levels = rev(book_titles))
+
+#eliminate the unnecessary dataset
+rm(clean)
+#This is our final dataset
+harry_potter_books
+```
+
+#### Filtering stopwords
+
+Besides the commonly used stopwords, I might need to filter some more specific of the HP books. Nonetheless, up to now all the stopwords I have identified are present on the stop_words tibble from the tidytext. Perhaps later more stopwords or less useful words to be removed stand out when other types of analyses are performed.
+
+```{r}
+stop_words #tidytext stop words
+```
+
+Now we filter our novels:
+
+```{r}
+#anti_join keeps in data1 the words not present in the intersection between data1 and data2
+harry_potter_books <- harry_potter_books |>  #data1 
+  anti_join(stop_words, join_by(word))#data2
+
+#we filter and keep all of the words that are not in both tables (harry_potter_books & stop_words)
+harry_potter_books
+```
+
+## Counting word frequencies
+
+```{r}
+harry_potter_books |> 
+  count(word, sort = TRUE) 
+```
+
+The **most commonly occurring words in the Harry Potter book series** are predominantly the names of the main characters, terms associated with the school where much of the saga unfolds, and magical terminology like "wand."
+
+Let's make a simple **plot** with words and frequencies:
+
+```{r}
+harry_potter_books |> 
+  count(word, sort = TRUE) |> 
+  #only words mentioned over 800 times in the novels
+  filter(n > 800) |> 
+  #we reorder words by number of mentions
+  mutate(word = reorder(word, n)) |> 
+  #we create the plot with the word (x) and the number of mentions (y)
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+As mentioned, we can see that the most frequent words are the character´s names or terms related to the magical context of the movies such as Hogwarts, wand or dark.
+
+#### Comparing frequencies across books
+
+```{r}
+frequency <- harry_potter_books |>  
+#regex to identify words and not _words_
+  mutate(word = str_extract(word, "[a-z']+")) %>% #finding everything starting from a to z, any word
+  #we count number of mentions of a word for an author
+  count(book, word) %>%
+  #we calculate proportion over the total sum of words
+  group_by(book) %>%
+  mutate(proportion = n / sum(n)) %>% 
+  select(-n) %>% 
+  #we reshape the dataframe
+  #pivot wider means: more columns, less rows
+  pivot_wider(names_from = book, values_from = proportion) %>%
+  #pivot longer means: more rows, less columns
+  pivot_longer(`Chamber of Secrets`:`Deathly Hallows`,
+               names_to = "book", values_to = "proportion") |> 
+  arrange(desc(proportion))
+
+frequency
+
+```
+
+Perhaps it´s a bit clearer plotted. My preference would be perhaps to observe word frequencies accross the saga in relation to the first book, as it is the one that sets the tone and context for the rest of the books:
+
+```{r}
+# expect a warning about rows with missing values being removed
+ggplot(frequency, aes(x = proportion, y = `Philosopher's Stone`, 
+                      color = abs(`Philosopher's Stone` - proportion))) +
+  geom_abline(color = "gray40", lty = 2) +
+  #you can use geom_jitter to adjust the points location and gain visibility
+  geom_jitter(alpha = 0.1, size = 0.5, width = 0.3, height = 0.3) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 0.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), 
+                       low = "darkslategray4", high = "gray75") +
+  facet_wrap(~book, ncol = 2) +
+  theme(legend.position="none") +
+  labs(y = "Philosopher's Stone", x = NULL)
+```
+
+The words further from the line are the ones that will precisely give us some insight of what the book is about as the words represented far from the line are words that are found more in one book than in the reference one (Philosopher's Stone).
+
+For example, in "The Half-Blood Prince" they play a Quidditch match on the [field]{.underline}, and also throughout the book there are many messages of "do not panic" sent from the [minister]{.underline} of magic. Also in that movie a significant portion of the narrative focuses on Harry's efforts to obtain Professor Slughorn's authentic [memory]{.underline}, which reveals his disclosure of crucial information to Voldemort regarding Horcruxes.
+
+In general we can see that the second book (**Chamber of secrets)** is related somehow to a chamber, secrets, spiders as well as something pure and Ginny, the third **(Prisoner of Azkaban)** to the minister of magic, law, a cage, to the castle and to Sirius Black, the fourth book **(Goblet of fire)** to the magical ministry, to a tent (probably for the each team of the games), Sirius is again present as well as Lord (Voldemort). Regarding the fifth book (**Order of the Phoenix**) Ginny and Sirius are again present and death and Lord (voldemort) are words that become more present, in the sixth book (**Half-Blood Prince**) Dumbledore's death is quite important as well as trying to retrieve something from his memory (the horocruxes). Lastly, in the seventh book (**Deathly Hallows)** words like death, Voldemort, wand, sword (of Gryffindor, used to destroy horocruxes), jinx, tent (in which the main characters spend days in the middle of the forest in the search of horocruxes) etc...
+
+#### Calculating correlation
+
+To undertand **how similar the content of each book of the saga is to the first book of the saga**, let's **quantify** now how similar and different the previous sets of word frequencies are by using [**Pearsoncorrelation coefficient (cor.test)**]{.underline}. Let´s check book by book, always taking the first book as reference:
+
+[**Chamber of Secrets**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Chamber of Secrets",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9453708
+
+[**Prisoner of Azkaban**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Prisoner of Azkaban",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9467475
+
+[**Half-Blood Prince**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Half-Blood Prince",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9195777
+
+[**Goblet of Fire**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Goblet of Fire",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9437549
+
+[**Order of the Phoenix**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Order of the Phoenix",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9361135
+
+[**Deathly Hallows**]{.underline}
+
+```{r}
+cor.test(data = frequency[frequency$book == "Deathly Hallows",],
+         ~ proportion + `Philosopher's Stone`)
+```
+
+cor: 0.9052154
+
+The saga is quite long, so it makes sense that the two books that have the lowest correlation with the first one (although extremely strong still, and thus keeping the essence of the saga) are the two last ones. Perhaps because they gravitate more around finding the Horcruxes. Therefore the **two "most differet" books** in relation to the first one are the **Half-Blood Prince and the Deathly Hallows**
+
+## Sentiment analysis
+
+In order to perform a sentiment analysis of the text I will use the three general-purpose sentiment lexicons from the `tidytext` package:
+
+```{r}
+get_sentiments("afinn") # score between -5 and 5
+get_sentiments("bing") #positive/negative
+get_sentiments("nrc") #binary categorization of many sentiments
+```
+
+#### Extract sentiment from Harry Potter books
+
+I will work with the harry_potter_books dataframe, where we can find [three columns]{.underline}: book, chapter and word, so it´s already tokenised.
+
+![](images/Screenshot%202024-03-27%20at%2010.51.33.png){width="275"}
+
+Since besides magic there are a lot of scary moments in the Harry Potter saga, so let´s try to see what are the most common [**fear words**]{.underline} used in the first book (**Philosopher's Stone**)
+
+```{r}
+#we set nrc lexicon to fear
+nrc_fear <- get_sentiments("nrc") |> 
+  filter(sentiment == "fear")
+
+harry_potter_books |> 
+    #we choose the book Philosopher's Stone
+    filter(book == "Philosopher's Stone") |> 
+    #we combine both lists, NRC and Philosopher's Stone´s words
+    inner_join(nrc_fear) %>%
+    #we count the mentions of each word to find the most frequent
+    count(word, sort = TRUE) |> 
+  #Filter them by frequency (only mentioned more than X times)
+  filter(n > 10) |> 
+  #Reorder column word by number of mentions (most frequents on top)
+   mutate(word = reorder(word, n)) %>%
+  #Create the plot with x=n, y=word |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+The previous plot reveals many key fear-inducing elements, which align with the challenges and dangers Harry Potter faces throughout the book. Words like *"fire," "dragon," "troll," "giant," and "snake"* reflect the **physical threats** and dangerous situations encountered by Harry and his friends. These elements contribute to a sense of danger and suspense within the narrative.
+
+Additionally, words like *"bad," "horrible," "pain," "terrible," and "die"* evoke **emotional and psychological fears**, highlighting the characters' inner struggles and the darker aspects of their experiences. The presence of words like *"scar," "fang," and "mad"* also make reference to specific characters or events that evoke fear in the story, such as Voldemort's mark on Harry, dangerous creatures like the giant snake (of which they pull of its fang) , or the malevolent intentions of antagonistic characters.
+
+Let´s also see this on the last book (**Deathly Hallows**), which is much more dramatic and scary in that sense:
+
+```{r}
+harry_potter_books |> 
+    #we choose the book Philosopher's Stone
+    filter(book == "Deathly Hallows") |> 
+    #we combine both lists, NRC and Philosopher's Stone´s words
+    inner_join(nrc_fear) %>%
+    #we count the mentions of each word to find the most frequent
+    count(word, sort = TRUE) |> 
+  #Filter them by frequency (only mentioned more than X times)
+  filter(n > 30) |> 
+  #Reorder column word by number of mentions (most frequents on top)
+   mutate(word = reorder(word, n)) %>%
+  #Create the plot with x=n, y=word |> 
+  ggplot(aes(n, word)) +
+  geom_col() +
+  labs(y = NULL)
+```
+
+This graph clearly represents more the book.
+
+The prominence of words like "death," "darkness," "pain," "kill," "mad," and "fear" reflects the heightened stakes and pervasive sense of dread that permeates the book.The most used fear word is death, it all revolves around either Harry Potter or Voldemort´s possible death in the final battle.
+
+Also Harry´s scar becomes more relevant in this book. References to "scar," "snake," and "curse" evoke reminders of past traumas and ongoing conflicts, serving as constant reminders of the dangers faced by Harry and his allies. The word "broken" appears frequently, suggesting the shattered state of the magic world and the characters' spirits given the danger of the situation.
+
+We can see harsher words in general such as pain, curse, grave, shaking, kill, die...
+
+#### Positive and negative balance
+
+It has become clear that the saga is filled with terror words, which are often negative, so to put this in context, we can analyze the top positive and negative words of the books with the Bing lexicon:
+
+```{r}
+#create a data frame with word, sentiment and number of mentions
+positive_negative_HP <- harry_potter_books |> 
+  #we get sentiments from bing
+  inner_join(get_sentiments("bing")) |> 
+  #count the number of mentions for each word
+  count(word, sentiment, sort = TRUE) |> 
+  ungroup()
+
+positive_negative_HP |> 
+  group_by(sentiment) |> 
+  #filter the top 15 most frequent words
+  slice_max(n, n = 20) |> 
+  ungroup() |> 
+  mutate(word = reorder(word, n)) |> 
+  #plot the frequencies
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = TRUE) +
+  #organise the grid by sentiment and free Y
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+**Top negative terms** "dark" and "death" represent the omnipresent threat of Voldemort's darkness and the seriousness of mortality, respectively, and depict the difficulties and perils that the characters must overcome. Words like "fell" and "hard" highlight the difficult journey and abrupt changes that the characters go through, while references to "moody" and "fudge" allude to the trauma and corruption that are a part of the magic world. "Scar" acts as an emotional remembrance of Harry Potter's past and his association with the evil Voldemort.
+
+On the other hand, the most positive words evoke the magic and happiness that soaks into the magic world. While terms like "gold" and "golden" denote victory, possibly of valued accomplishments and treasures within the narrative such as the [Golden Snitch or the house´s trophy]{.underline}, words like "magic" and "magical" celebrate the series' enchanting moments.
+
+Nonetheless, I believe that the negative words are more representative of negative sentiment than positive words, as "top", "people", "looked", "led" or "well" are words that are often also used in context without a negative or positive connotation.
+
+We can add some of these words to an existent stopwords list that we can find directly in `stop_words`.
+
+```{r}
+custom_stop_words <- bind_rows(tibble(word = c("top","people", "well", "looked", "led", "yeah"),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+
+custom_stop_words
+```
+
+```{r}
+tidy_HP <-harry_potter_books |> 
+  #we filter stopwords
+  anti_join(custom_stop_words)
+
+positive_negative_HP <- tidy_HP |> 
+  #we get sentiments from bing
+  inner_join(get_sentiments("bing")) |> 
+  #count the number of mentions for each word
+  count(word, sentiment, sort = TRUE) |> 
+  ungroup()
+```
+
+```{r}
+positive_negative_HP |> 
+  group_by(sentiment) |> 
+  slice_max(n, n = 15) |> 
+  ungroup() |> 
+  mutate(word = reorder(word, n)) |> 
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = TRUE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+```
+
+That looks a bit better.
+
+#### Wordclouds
+
+Now maybe we can better visualize word frquencies with wordclouds:
+
+```{r,warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=15}
+library(wordcloud)
+
+#set the colors from a brewer palette. 8 colours from 
+colors = brewer.pal(8, 'BuPu')
+
+tidy_HP |> 
+  #we filter stopwords
+  anti_join(custom_stop_words) |> 
+  #we count words
+  count(word) |> 
+  #we use the wordcloud function with the colours argument
+  with(wordcloud(word, n, max.words = 80))
+```
+
+In the previous wordcloud the most frequent words of the saga are represented through its size in a wordcloud
+
+Now we can go a step further and **compare the wordclouds for positive and negative words:**
+
+```{r, warning=FALSE, message=FALSE, fig.align='center', fig.width=10, fig.height=12}
+library(reshape2)
+
+tidy_HP |> 
+  #we get sentiments
+  inner_join(get_sentiments("bing")) %>%
+  #we count word mentions
+  count(word, sentiment, sort = TRUE) %>%
+  #we establish criteria for size
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  #we paint two wordclouds in one using two different colors
+  comparison.cloud(colors = c("deepskyblue4", "deeppink4"),
+                   max.words = 90)
+```
+
+#### Sentiment distribution in novels
+
+We can also examine **how sentiment changes throughout each book.** To do so it is necessary to create some unit of analysis, which could be 80 lines. Nonetheless since all the books were straight away tokenised I don´t have a line number so let´s just take 800 words as a unit of analysis:
+
+```{r}
+harry_potter_books <- harry_potter_books |> 
+  mutate(wordcount = row_number())#create the wordcount as the row number
+
+harry_potter_sentiment <- harry_potter_books %>%
+  #find the sentiment for each word using bing
+  inner_join(get_sentiments("bing")) %>%
+  #divide each book in chunks of 800 words
+  count(book, index = wordcount %/% 800, sentiment) %>%
+  #we write positive and negative in different columns
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>%
+  #we substract positive minus negative to find a net sentiment
+  mutate(sentiment = positive - negative)
+
+harry_potter_sentiment
+```
+
+And now we can [plot it:]{.underline}
+
+```{r}
+#create the plot with x = index (chunks) and y = net sentiment
+ggplot(harry_potter_sentiment, aes(index, sentiment, fill = book)) +
+  geom_col(show.legend = TRUE) +
+  facet_wrap(~book, ncol = 2, scales = "free_x")
+```
+
+Most of them are quite negative, and specially the last book of the saga. Nevertheless this is what I already expected given that it is a quite dramatic and scary saga, always revolving around death and black magic. It stands out that the book with the most dramatic ending is the Half-Blood Prince, at least in comparison to the Philosopher´s stone, which seems more vanilla next to it.
+
+#### Saga sentiment evolution
+
+These sentiment analysis plots just displayed can be put together to get a better picture of the sentimental evolution of the narrative throughout the books of the saga:
+
+```{r}
+# Load necessary libraries
+library(tidyverse)
+afinn <- get_sentiments("afinn")
+# Compute sentiment scores for each word in the dataset
+harry_potter_sentiment <- harry_potter_books %>%
+  inner_join(afinn)
+
+# Group by book and chapter, then sum up sentiment scores for each chapter
+sentiment_per_chapter <- harry_potter_sentiment %>%
+  mutate(series_chapter = cumsum(c(1, diff(chapter) != 0))) 
+sentiment_per_chapter <- sentiment_per_chapter|> 
+  group_by(book, series_chapter) |> 
+  summarise(total_sentiment = sum(value))|> 
+  ungroup()
+```
+
+```{r}
+
+# Plot sentiment scores per chapter per book
+ggplot(sentiment_per_chapter, aes(x = series_chapter, y = total_sentiment, group = book, color = book)) +
+  geom_line(size = 1.2) + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +  # Add horizontal line at y = 0
+  labs(title = "AFINN Sentiment Score per Chapter per Book in Harry Potter Saga",
+       x = "Series Chapter",
+       y = "Total Sentiment Score") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+As we saw before all the books are quite negativealthough in the Half-blood Prince a few "happy moments" stand out. At the end nonetheless there is a last happy ending indicated by the last bit of the final line.
+
+#### Compare lexicons in Half-Blood Prince
+
+Lexicons are not always infallible, in fact, each carries its own subtle **biases** that can influence sentiment attribution. Hence, it becomes quite relevant to examine how the three previously defined lexicons might categorize the sentiment of one of the books.
+
+In this analysis, I will delve into one of the most gripping books of the Harry Potter saga, the Half-Blood Prince, which stands out for its dramatic conclusionI
+
+```{r}
+half_blood_prince <- harry_potter_books |>  
+  filter(book == "Half-Blood Prince")
+
+half_blood_prince
+```
+
+```{r}
+#for AFINN we need to summarise quantities to get net sentiment.
+afinn <- half_blood_prince |> 
+  inner_join(get_sentiments("afinn")) |> 
+  #get the sentiment for each chunk of 800 words
+  group_by(index = wordcount %/% 800) |> 
+  summarise(sentiment = sum(value)) |>  
+  mutate(method = "AFINN")
+
+#for Bing and NRC we can do it in one step.
+bing_and_nrc <- bind_rows(
+  #Bing
+  half_blood_prince |> 
+    #we get sentiments from bing
+    inner_join(get_sentiments("bing")) |> 
+    #we create the column for bing
+    mutate(method = "Bing et al."),
+  #NRC
+  half_blood_prince |> 
+    #we get sentiment from nrc 
+    inner_join(get_sentiments("nrc") |> 
+                 #we filter just sentiment, not emotions
+                 filter(sentiment %in% c("positive", 
+                                         "negative"))
+    ) |> 
+    #we create the column for nrc
+    mutate(method = "NRC")) |> 
+  #we divide in chunks of 80 lines
+  count(method, index = wordcount %/% 800, sentiment) %>%
+  #we write positive and negative in different columns
+  pivot_wider(names_from = sentiment,
+              values_from = n,
+              values_fill = 0) %>% 
+  #we extract net sentiment by substraction
+  mutate(sentiment = positive - negative)
+```
+
+Let´s look at the evolution given this positive-negative scale
+
+```{r}
+afinn
+bing_and_nrc
+```
+
+And finally, **let's bind the three of them together and visualize them in a plot:**
+
+```{r}
+#bind the three of them
+bind_rows(afinn, 
+          bing_and_nrc) %>%
+  #make the plot with x=index (chunks), y=sentiment and fill by lexicon (method)
+  ggplot(aes(index, sentiment, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~method, ncol = 1, scales = "free_y")
+```
+
+The bing lexicon is much more negative in general and the AFINN is the most positive. They all detect a dramatic ending but for example the according to the bing lexicon it is represented as something gradual whereas according to the NRC as something sudden and very unexpected.
+
+#### Most negative chapters
+
+I would like to know given that this is a whole saga; **which chapter has the highest proportion of negative words (using Bing)?**
+
+We have already seen more or less in the previous plots the sentiment evolution of the saga, so let´s give some sense and context to it by seeking the chapters with most negative words of each book.
+
+**First** we filter the negative words from **bing**.
+
+```{r}
+#filter negative words from Bing
+bingnegative <- get_sentiments("bing") %>% 
+  filter(sentiment == "negative")
+bingnegative
+```
+
+**Second**, we need to create a dataframe with the number of words per chapter
+
+```{r}
+# make a dataframe (wordcounts) with number of words per chapter
+wordcounts <- harry_potter_books |> 
+  group_by(book, chapter) |> 
+  summarize(words = n())
+
+wordcounts
+```
+
+**Third**, create the ratio of the number of negative words to total words per chapter and filter to get the highest:
+
+```{r}
+#find the number of negative words by chapter and divide by the total words in chapter
+harry_potter_books |> 
+  #semi_join: returns all words in books with a match in bingnegative
+  semi_join(bingnegative) |> 
+  #group by book and chapter to summarize how many negative words by chapter
+  group_by(book, chapter) %>%
+  summarize(negativewords = n()) %>%
+  #left_join keeps all words in wordcounts and makes a dataframe
+  left_join(wordcounts, by = c("book", "chapter")) %>%
+  #create a column in the dataframe with the ratio
+  mutate(ratio = negativewords/words) %>%
+  #we don't want chapters 0 because they're just title and author
+  filter(chapter != 0) %>%
+  #we select the highest ratios
+  slice_max(ratio, n = 1) %>% 
+  ungroup()
+```
+
+Stands out how on the Goblet of fire it´s the first one whereas for the rest of books the most negative chapter is either in the middle of the story or rather towards the end. But as we can see, the **book with the chapter with most negative words is the Order of the Phoenix**, and its chapter 37 stands out for it.
+
+## Term Frequency
+
+#### Most frequent words by book
+
+I will plot the most frequent words by book, but in order to make a meaningful analysis perhaps it´s best to filter out also the names of the main characters that often appear in almost every book (I will add them to the custom stop words tibble):
+
+```{r}
+custom_stop_words <- bind_rows(tibble(word = c("top", "well", "led", "harry", "ron", "hermione", "weasley", "dumbledore", "professor", "malfoy", "potter", "snape", "harry's", "people", "looked", "yeah" ),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+
+custom_stop_words
+```
+
+```{r}
+harry_potter_books |> 
+  # delete stopwords
+  anti_join(custom_stop_words) |> 
+  # summarize count per word per book
+  count(book, word) |> 
+  # get top 15 words per book
+  group_by(book) |> 
+  slice_max(order_by = n, n = 15) |> 
+  mutate(word = reorder_within(word, n, book)) |> 
+  # create barplot
+  ggplot(aes(x = word, y = n, fill = book)) +
+  geom_col(color = "black") +
+  scale_x_reordered() +
+  labs(
+    title = "Most frequent words in Harry Potter",
+    x = NULL,
+    y = "Word count"
+  ) +
+  facet_wrap(facets = vars(book), scales = "free") +
+  coord_flip() +
+  theme(legend.position = "none")
+```
+
+Now deffinitely the most frequent words are way more representative of each book
+
+#### Wordcloud per book
+
+Also wordclouds can be an excellent tool to get a picture of the context or the main things going on in each book, so let´s plot one for each:
+
+```{r}
+book_titles <- c("Philosopher's Stone", "Chamber of Secrets", "Prisoner of Azkaban","Goblet of Fire", "Order of the Phoenix", "Half-Blood Prince","Deathly Hallows")
+
+create_wordcloud_grid <- function(book_titles, tidy_data) {
+  # Initialize an empty list to store word clouds
+  wordcloud_list <- list()
+  
+  # Loop through each book title
+  for (title in book_titles) {
+    # Filter data for the current book title
+    filtered_data <- tidy_data %>%
+      filter(book == title) %>%
+      anti_join(custom_stop_words) %>%
+      count(word)
+    
+    # Create word cloud for the current book title
+    wordcloud_list[[title]] <- wordcloud(words = filtered_data$word,
+                                         freq = filtered_data$n,#to plot the size
+                                         max.words = 80, 
+                                         main = title)
+  }
+}
+
+# Call the function
+create_wordcloud_grid(book_titles, tidy_HP)
+
+
+```
+
+As mentioned, names are the most frequent words.
+
+### TF-IDF set-up
+
+#### First: how many times each word appears in each book
+
+We can create a dataframe with this information
+
+```{r}
+#we obtain the text from the library
+book_words <- harry_potter_books |> 
+  count(book, word, sort = TRUE)
+book_words
+```
+
+#### Second step: how many total words there are in each book
+
+```{r}
+total_words <- book_words |> 
+  #we group by books to sum all the totals in the n column of book_words
+  group_by(book) |> 
+  #we create a column called total with the total of words by book
+  summarize(total = sum(n))
+
+total_words
+```
+
+#### Third step: we add this total to the `book_words` dataframe
+
+```{r}
+#we use left join because we need the join to keep all rows in book_words, regardless of repeating rows
+book_words <- left_join(book_words, total_words)
+book_words
+```
+
+With all this information we can perform the **term frequency,** which is the number of times a word appears in a novel divided by the total number of terms (words) in that novel.
+
+#### Fourth step: calculate term frequency
+
+```{r}
+book_words <- book_words |> 
+  #we add a column for term_frequency in each novel
+  mutate(term_frequency = n/total)
+
+book_words
+```
+
+#### Fifth step: visualize distribution in collection
+
+```{r}
+#we calculate the distribution and put it in the x axis, filling by book
+ggplot(book_words, aes(term_frequency)) +
+  #we create the bars histogram
+  geom_histogram(show.legend = TRUE) +
+  #we set the limit for the term frequency in the x axis
+  xlim(NA, 0.0009)
+```
+
+We have a **long tail distribution** with many words with very low frequencies and fewer with greater frequencies.
+
+#### Sixth step: visualize distribution by book
+
+```{r}
+#we calculate the distribution and put it in the x axis, filling by book
+ggplot(book_words, aes(term_frequency, fill = book)) +
+  #we create the bars histogram
+  geom_histogram(show.legend = TRUE) +
+  #we set the limit for the term frequency in the x axis
+  xlim(NA, 0.0002) +
+  #plot settings
+  facet_wrap(~book, ncol = 2, scales = "free_y")
+```
+
+Pilosopher´s stone for example has many words which can be grouped by similar frequencies in comparison to other books of the saga, yet together with the Chamber of Secrets it has least "rare" or less frequent words.
+
+#### Frequency and Rank
+
+Zipf's law (George Zipf) states that the *frequency of a word appearance in a text is inversely proportional to its rank*. This indicates that the lower the frequency, the higher the rank.
+
+Thus it can be interesting to **add to our dataframe the ranking of the words in descending order** by their frequency in each book.
+
+```{r}
+freq_by_rank <- book_words |> 
+  group_by(book) |> 
+  #we create the column for the rank with row_number by book
+  mutate(rank = row_number()) |> 
+  ungroup()
+
+freq_by_rank
+```
+
+Let´s visualize Zipf´s law in the Harry Potter collection:
+
+```{r}
+freq_by_rank |> 
+  ggplot(aes(rank, term_frequency, color = book)) + 
+  #plot settings
+  geom_line(linewidth = 1.1, alpha = 0.8, show.legend = TRUE)
+```
+
+It is mostly the **Philosopher´s stone and the Chamber of secrets the books that use words with lowest rank**. Yet this is better visualized on logarithmic scales.
+
+```{r}
+freq_by_rank |> 
+  ggplot(aes(rank, term_frequency, color = book)) + 
+  geom_line(linewidth = 1.1, alpha = 0.8, show.legend = FALSE) + 
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+As we can see more or less all the books follow the same tendency in terms of the use of words. Nonetheless **books like the Order of the Phoenix and Goblet of Fire stand out in the tail of lowest rank** (also because they are longer books).
+
+[**Measuring deviation:**]{.underline}
+
+If we break the previous plot in three sections that we assume to be three different usages of language, we can see that the middle section is the most stable one.
+
+Let's find the **coefficients that define the relationship in this section between the tf and the rank** and plot the deviation :
+
+```{r}
+#we set the section in a variable called rank_subset
+rank_subset <- freq_by_rank |> 
+  filter(rank < 500,
+         rank > 10)
+
+#we use the linear model function (lm) to find numeric coefficients of relationship between tf and rank
+lm(log10(term_frequency) ~ log10(rank), data = rank_subset)
+```
+
+**Coefficients:**
+
+-   (Intercept): -1.7215
+
+-   log10(rank): -0.6225
+
+This line now can be added to our plot to see the deviation from the standard use of language in the books
+
+```{r}
+freq_by_rank |> 
+  ggplot(aes(rank, term_frequency, color = book)) + 
+  #we add a line in the plot with the two coefficients we have found
+  geom_abline(intercept = -1.7215, slope = -0.6225, 
+              color = "gray50", linetype = 2) +
+  geom_line(size = 1.1, alpha = 0.8, show.legend = FALSE) + 
+  scale_x_log10() +
+  scale_y_log10()
+```
+
+-   Deviation in the **third section** means J.K. Rowling uses a lower percentage of the most common words than many collections of language
+
+-   Deviation in the **first section** means J.K. Rowling uses a higher percentage of rare words than many collections of language.
+
+### TF-IDF
+
+The [`bind_tf_idf()`](https://rdrr.io/pkg/tidytext/man/bind_tf_idf.html) function in the tidytext package takes a tidy text data frame as input with one row per token (term), per document. It only needs 3 columns: book, word and n (frequency).
+
+```{r}
+HP_tf_idf <- book_words |> 
+  #create tf-idf column
+  bind_tf_idf(word, book, n)
+
+HP_tf_idf
+```
+
+At the top, we find the words with very low TF-IDF, near zero, because these are words that occur in many of the documents in a collection
+
+As previously noted and as suggested by Zipf's law, when a word appears in numerous documents, it becomes less distinctive to any single one, resulting in higher TF-IDF scores for words with lower occurrence rates. Consequently, the **TF-IDF analysis prioritizes these less frequent words**. We will be therefore interested in the **words with higher TF-IDF:**
+
+```{r}
+HP_tf_idf |> 
+  #we exclude the total column which is not necessary now
+  select(-total) |> 
+  #we arrange by tf-idf in descending order
+  arrange(desc(tf_idf))
+```
+
+**Let´s visualize the words with highest tf-idf of each book:**
+
+```{r}
+library(forcats)
+
+HP_tf_idf |> 
+  group_by(book) |> 
+  #choose maximum number of words
+  slice_max(tf_idf, n = 20) |> 
+  ungroup() |> 
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 3, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+```
+
+In **"Philosopher's Stone"**, words such as "Quirrell," "Flamel," and "Nicolas" highlight key characters. References to "Troll," "Flute," and "Stone's" evoke memorable plot points, such as the troll incident in the girls' bathroom and the enchantment protecting the Philosopher's Stone. Moreover, terms like "Ollivander" and "Remembrall" reflect the enchants used in the book.
+
+Moving to "**Chamber of Secrets**", words such as "Lockhart," "Dobby," and "Myrtle" refer to important characters. The presence of "Riddle", "Diary" and "Basilisk" signifies the central mystery surrounding the Chamber of Secrets and Tom Riddle's memory. Additionally, references to "Mandrakes" and "Aragog" evoke the magical creatures present in the school.
+
+In "**Prisoner of Azkaban**", words like "Lupin," "Pettigrew," and "Marge" evoke the central mysteries and characters of the book. The presence of "Black" and "Scabbers" mark the revelation of Sirius Black's innocence and the true identity of Ron's pet rat, Scabbers. Additionally, terms like "Dementors" and "Expecto" refer to the enchantment (Expecto Patronum) used with the dementors.
+
+For "**Goblet of Fire**", distinctive words like "Bagman," "Winky," and "Champions" are related to the Triwizard Tournament. Meanwhile, references to "Moody" and "Cedric" evoke pivotal events and characters central to the book's climax, emphasizing themes of trust and betrayal.
+
+In "**Order of the Phoenix**", words such as "Umbridge," "Defence," and "Luna" reflect the tumultuous events at Hogwarts School and the rise of Dolores Umbridge to power. The presence of "Sirius" and "Tonks" signifies the involvement of key members of the Order of the Phoenix and the challenges they face in resisting Voldemort's return. Additionally, terms like "Prophecy" and "Eaters" hint at the escalating conflict.
+
+In "**Half-Blood Prince**", "Slughorn," "McLaggen," and "Morfin" are key characters. Professor Slughorn's role in divulging crucial information to Harry, as well as the introduction of characters like Cormac McLaggen and Morfin Gaunt, contribute to the development and revelations central to the book's narrative. References to "Felix Felicis" and "Prophecy" allude to pivotal plot points of the book.
+
+Lastly, in "**Deathly Hallows**", words like "Xenophilius," "Griphook," "Hallows," and "Horcrux" reflect the intense focus on the quest for the Deathly Hallows and the hunt for Voldemort's Horcruxes, which drive much of the narrative tension. Characters such as "Luna" and "Kreacher" are significant players in this book. Additionally, names like "Greyback" and "Bellatrix" hint at the menacing presence of Death Eaters and the looming threat of darkness throughout the book.
+
+## N-Grams
+
+Another good way to understand the context and content of each book is using N-grams. **N-grams** are consecutive sequences of words where `n` defines the number of words composing a token. Here we will start working with them.
+
+#### Bigrams
+
+I will use the same function as in the beginning of the notebook but **tokenizing by n-grams (bigrams in this case)**
+
+```{r}
+# Creating vectors of book titles and corresponding texts:
+book_titles <- c("Philosopher's Stone", "Chamber of Secrets", "Prisoner of Azkaban",
+                 "Goblet of Fire", "Order of the Phoenix", "Half-Blood Prince", "Deathly Hallows")
+
+#I have to first redefine the books as their format has been changed
+philosophers_stone <- harrypotter::philosophers_stone
+chamber_of_secrets <- harrypotter::chamber_of_secrets
+prisoner_of_azkaban <- harrypotter::prisoner_of_azkaban
+goblet_of_fire <- harrypotter::goblet_of_fire
+order_of_the_phoenix <- harrypotter::order_of_the_phoenix
+half_blood_prince <- harrypotter::half_blood_prince
+deathly_hallows <- harrypotter::deathly_hallows
+
+# Creating vectors of book texts
+books <- list(philosophers_stone, chamber_of_secrets, prisoner_of_azkaban,
+              goblet_of_fire, order_of_the_phoenix, half_blood_prince, deathly_hallows)
+
+# Creating an empty tibble:
+harry_potter_bigrams <- tibble()
+
+# Looping through the book titles
+for (i in seq_along(book_titles)) {
+  # Saving the cleaned text in the "clean" dataset
+  # Each chapter is represented as a different element inside the vector, so the way to access it is book[chapter]
+  clean <- tibble(chapter = seq_along(books[[i]]),
+                  text = books[[i]]) |> 
+    # Tokenize the text into bigrams
+    unnest_tokens(bigram, text, token = "ngrams", n = 2) |> 
+    # Assign book titles
+    mutate(book = book_titles[i]) |> 
+    # First column is the book
+    select(book, everything())
+  # Stack the books together in rows
+  harry_potter_bigrams <- rbind(harry_potter_bigrams, clean)
+}
+
+# Set levels for the books according to their order of publication
+harry_potter_bigrams$book <- factor(harry_potter_bigrams$book, levels = rev(book_titles))
+
+# Eliminate the unnecessary dataset
+rm(clean)
+
+# This is our final dataset
+harry_potter_bigrams
+```
+
+**Each token now is a bigram, not a word**.
+
+Now then we can observe **which pairs of words are the most frequent**. Nonetheless before it would be necessary to filter stopwords to obtain valuable information:
+
+In order to do so first we need to separate the bigrams in two columns, then filter the stopwords and [then]{.underline} count the frequencies:
+
+```{r}
+bigrams_separated <- harry_potter_bigrams |> 
+  #we separate each bigram in two columns, word1 and word2
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+#we filter all words included in the word column in stop_words
+bigrams_filtered <- bigrams_separated |> 
+  filter(!word1 %in% stop_words$word) |> 
+  filter(!word2 %in% stop_words$word)
+
+# new bigram counts:
+bigram_counts <- bigrams_filtered |>  
+  #how many times in the bigrams_filtered they appear together
+  count(word1, word2, sort = TRUE)
+
+bigram_counts
+```
+
+As we can see, **the most frequent bigrams are proper nouns, name and surname combinations or title/relationship-name combinations**.
+
+Thus perhaps [filtering these words]{.underline} we can get more useful information:
+
+```{r}
+custom_stop_words <- bind_rows(tibble(word = c("top", "well", "led", "harry", "ron", "hermione", "weasley", "dumbledore", "professor", "malfoy", "potter", "snape", "harry's", "uncle","aunt", "madam", "madame", "voldemort", "lord", "yeah" ),  
+                                      lexicon = c("custom")), 
+                               stop_words)
+
+custom_stop_words
+```
+
+Now we filter our bigrams with the custom stopwords:
+
+```{r}
+#we filter all words included our custom stop_words df
+bigrams_filtered1 <- bigrams_separated |> 
+  filter(!word1 %in% custom_stop_words$word) |> 
+  filter(!word2 %in% custom_stop_words$word)
+
+# new bigram counts:
+bigram_counts1 <- bigrams_filtered1 |> 
+  #how many times in the bigrams_filtered they appear together
+  count(word1, word2, sort = TRUE)
+
+bigram_counts1
+```
+
+We can see death eaters are quite relevant together with the invisibility cloak and the dark arts that wrap basically the two previous terms. Lastly, Mad Eye (also Moody) seems to be a quite important second character throughout the series.
+
+After the bigrams are filtered, we can unite them again:
+
+```{r}
+bigrams_united <- bigrams_filtered |> 
+  unite(bigram, word1, word2, sep = " ")
+bigrams_united
+```
+
+**Also we can visualize them:**
+
+```{r}
+library(ggraph)
+set.seed(2017)
+# we use the dataframe with bigram counted.
+bigram_counts
+
+# filter by the 20 more common combinations using n
+bigram_for_graph <- bigram_counts |> 
+  filter(n > 20) |> 
+  graph_from_data_frame()
+
+bigram_for_graph
+
+# to introduce settings and improve our graph
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(bigram_for_graph, layout = "fr") + #layout is used to prevent nodes from overlapping
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,#plot edges
+                 arrow = a, end_cap = circle(.07, 'inches')) + #plot nodes
+  geom_node_point(color = "lightblue", linewidth = 5) + #add text/the words
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
+
+I used the bigrams with just the regular stopwords being filtered as this graph can display a lot of information and we don´t want to miss out on that. Most of the bigrams linked to Harry and also we can appreciate how professor has many other words tied to it, as well as Griffindor.
+
+#### Trigrams
+
+Actually the same could be done with trigrams, and perhaps this could shed some light on the content of the books as well:
+
+We tokenize each book as a trigram and perform the same filtering and frequency counting as with the bigrams:
+
+```{r}
+# Creating an empty tibble:
+harry_potter_trigrams <- tibble()
+
+# Looping through the book titles
+for (i in seq_along(book_titles)) {
+  # Saving the cleaned text in the "clean" dataset
+  # Each chapter is represented as a different element inside the vector, so the way to access it is book[chapter]
+  clean <- tibble(chapter = seq_along(books[[i]]),
+                  text = books[[i]]) |> 
+    # Tokenize the text into bigrams
+    unnest_tokens(trigram, text, token = "ngrams", n = 3) |> 
+    # Assign book titles
+    mutate(book = book_titles[i]) |> 
+    # First column is the book
+    select(book, everything())
+  # Stack the books together in rows
+  harry_potter_trigrams <- rbind(harry_potter_trigrams, clean)
+}
+
+# Set levels for the books according to their order of publication
+harry_potter_trigrams$book <- factor(harry_potter_trigrams$book, levels = rev(book_titles))
+
+# Eliminate the unnecessary dataset
+rm(clean)
+
+# This is our final dataset
+harry_potter_trigrams
+```
+
+We filter them :
+
+```{r}
+trigrams_separated <- harry_potter_trigrams %>%
+  #we separate each bigram in two columns, word1 and word2
+   separate(trigram, c("word1", "word2", "word3"), sep = " ")
+
+#we filter all words included in the word column in stop_words
+trigrams_filtered <- trigrams_separated |> 
+   filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word)
+
+# new bigram counts:
+trigram_counts <- trigrams_filtered |>  
+  #how many times in the trigrams_filtered they appear together
+ count(word1, word2, word3, sort = TRUE)
+
+trigram_counts
+```
+
+And then unite them back:
+
+```{r}
+trigrams_united <- trigrams_filtered |> 
+  unite(trigram, word1, word2, word3, sep = " ")
+trigrams_united
+```
+
+**Also, we can visualize them:**
+
+```{r}
+library(ggraph)
+set.seed(2017)
+# we use the dataframe with bigram counted.
+trigram_counts
+
+# filter by the 20 more common combinations using n
+trigram_for_graph <- trigram_counts %>%
+  filter(n > 3) %>%
+  graph_from_data_frame()
+
+
+# to introduce settings and improve our graph
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(trigram_for_graph, layout = "fr") + #layout is used to prevent nodes from overlapping
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
+
+Again, we can see most trigrams are related to Harry, professors, untidy stuff, magical things and death.
+
+#### TF-IDF with bigrams
+
+Likewise, we can combine n-grams analysis with TF-IDF analysis to get a very informative output and instead of the most frequent bigrams we can get the most distinctive bigrams by book.
+
+```{r}
+bigram_tf_idf <- bigrams_united %>%
+  #we count by book
+  count(book, bigram) %>%
+  #we perform tf_idf
+  bind_tf_idf(bigram, book, n) %>%
+  #we arrange in descending order
+  arrange(desc(tf_idf))
+
+bigram_tf_idf
+```
+
+And now we can **plot it** to better understand it:
+
+```{r}
+bigram_tf_idf %>%
+  group_by(book) %>%
+  #choose maximum number of words
+  slice_max(tf_idf, n = 6) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(bigram, tf_idf), fill = book)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~book, ncol = 2, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+```
+
+This technique is better at showing characteristic events of each book like Myrtle´s scene with Harry potter crying in the bathroom or the expectro patronum that Harry was able to conjure in the Prisoner of Azkaban.
+
+### Words preceded by nots:
+
+Comprehending the meaning and consequences of negation in language is important for a number of domains, such as sentiment analysis, natural language processing, and cognitive science. Negation, which is frequently indicated by words like "not," "never," or "no," adds another level of complexity to language comprehension and interpretation since it sheds light on the sentiment and polarity of a text.
+
+In the following lines its effects on the words of the books will be explored:
+
+```{r}
+#get sentiments from afinn
+AFINN <- get_sentiments("afinn")
+
+```
+
+Filtering the bigrams dataframe for those that contain the negation word "not" before another word:
+
+```{r}
+nots <- harry_potter_bigrams |> 
+        #separate the bigrams
+        separate(bigram, c("word1", "word2"), sep = " ") |> 
+        #filter for bigrams with negation
+        filter(word1 == "not") %>%
+        inner_join(AFINN, by = c(word2 = "word")) |> 
+        count(word2, value, sort = TRUE) 
+
+
+```
+
+And now **plot it** **:**
+
+```{r}
+nots |> 
+        # create a contribution of each word for the whole corpus with score: times repeated x value x (-1)
+        mutate(contribution = n * value) |> 
+        arrange(desc(abs(contribution))) |> 
+        head(20) |> 
+        ggplot(aes(reorder(word2, contribution), n * value, fill = n * value > 0)) +
+        geom_bar(stat = "identity", show.legend = FALSE) +
+        xlab("Words preceded by 'not'") +
+        ylab("Sentiment score * # of occurrances") +
+        coord_flip()
+```
+
+When it comes to making an interpretation we have to take into account that these words are precededd by the word not, so for example "not help", which actually should have a very positive contribution to the sentiment analysis of the books in reality it means the opposite. The same goes for "not bad", which in reality means that something is okay but in the analysis we could be performing only adds to the negative sentiment.
+
+Bi-grams such as "not help," "not want," and "not like" could also be main causes of misidentification, leading to an excessively positive reading of the text (at least in comparison to what it should be).
+
+Building on this, a more thorough analysis could include a long list of negation signal words, like "not," "no," "never," and "without." This wider focus would make it possible to identify a greater variety of words that come before negation and would make it easier to conduct a more thorough analysis of how these words affect the interpretation of sentiment.
+
+```{r}
+negation_words <- c("not", "no", "never", "without")
+
+(negated <- harry_potter_bigrams |> 
+                separate(bigram, c("word1", "word2"), sep = " ") |> 
+                filter(word1 %in% negation_words) |> 
+                inner_join(AFINN, by = c(word2 = "word")) |> 
+                count(word1, word2, value, sort = TRUE) |> 
+                ungroup()
+)
+```
+
+And now we **plot it:**
+
+```{r}
+negated |> 
+  mutate(contribution = n * value,
+         sign = if_else(value > 0, "postive", "negative")) %>%
+  group_by(word1) %>% 
+  top_n(10, abs(contribution)) |> 
+  ungroup() |> 
+  ggplot(aes(y = reorder_within(word2, contribution, word1), 
+             x = contribution, 
+             fill = sign)) +
+  geom_col() + 
+  scale_y_reordered() + 
+  facet_wrap(~ word1, scales = "free") + 
+  labs(y = 'Words preceeded by a negation',
+       x = "Contribution (Sent value * number of mentions)",
+       title = "Most common pos or neg words to follow negations")
+```
+
+We can see in the previous plots how negation has affected the sentiment analysis of certain words.
+
+### Conditional n-grams: Houses adjectives
+
+We may want to condition the n-grams to obtain just those containing a specific word. In our case we could look at the **most frequent connotations/words associated to each of the harry potter houses**:
+
+```{r}
+# Gryffindor
+trigrams_filtered |> 
+ #I will look inside trigrams to seek adjectives before and after the house name
+  filter(word2 == "gryffindor") |> 
+  count(book, word1, word2, word3, sort = TRUE)
+
+# Hufflepuff
+trigrams_filtered |> 
+  filter(word2 == "hufflepuff") |> 
+  count(book, word1, word2, word3, sort = TRUE)
+
+# Ravenclaw
+trigrams_filtered |> 
+  filter(word2 == "ravenclaw") |> 
+  count(book, word1, word2, word3, sort = TRUE)
+
+# Slytherin
+trigrams_filtered |> 
+  filter(word2 == "slytherin") |> 
+  count(book, word1, word2, word3, sort = TRUE)
+
+```
+
+Words associated with Gryffindor include always house (like the other houses), as well as tower (referring to its location), quidditch which makes reference to the games between houses and also "fellow gryffindor muggle" (perhaps referring to hermione).
+
+The Hufflepuff house is mostly related to nous and words related to the games such as "blond hufflepuff player", "countless hufflepuff cups" or "glory hufflepuff house".
+
+More or less the same happens with the Ravenclaw house, as we can see often next to it words like "game", "captain", "played", "game" and "tower".
+
+Lastly, Slytherin can be related as well to games (with words like "captain", "score", and "hoop") as well as to girls and one trigram stands out: "stringy slytherin boy", which is probably referring to Draco.
+
+### Correlating pairs of words
+
+We have been working with pairs of adjacent words that always go together. Let's look know to pairs of words that appear in the same context, but not necessarily together.
+
+Let´s take the book "Half-Blood Prince" as a sample for our analysis:
+
+```{r}
+harry_potter_books <- harry_potter_books |> 
+  mutate(wordcount = row_number())
+
+
+#Let´s take the half-blood Prince book for example
+HP_section_words <- harry_potter_books |> 
+  filter(book == "Half-Blood Prince") |> 
+  mutate(section = wordcount %/% 100) |> 
+  filter(section > 0) |> 
+  filter(!word %in% stop_words$word)
+
+HP_section_words
+```
+
+The `pairwise_count()` function gives us one row for each pair of words, and the number of times they co-appeared in the same section of 10 lines. It belongs to the package `widyr`.
+
+```{r}
+library(widyr)
+word_pairs <- HP_section_words %>%
+  pairwise_count(word, section, sort = TRUE)
+
+word_pairs
+```
+
+As it can be seen, mostly names are co-appearing in the book.
+
+#### Sentiment associated to each character
+
+Now let´s filter to see which words often share context with each of the main characters and then perform a sentiment analysis on it**:**
+
+(this analysis only applies to the Half-Blood Prince book)
+
+```{r}
+main_characters <- word_pairs %>%
+  filter(item1 == "harry" | item1 == "hermione" | item1 == "ron")
+main_characters
+```
+
+Add the sentiment contribution for each co-appearing word that goes together with the names:
+
+```{r}
+main_characters_sentiment <- main_characters |> 
+  inner_join(AFINN, by = c(item2 = "word")) |> 
+  count(item1, item2, value, sort = TRUE)
+
+main_characters_sentiment <- main_characters_sentiment %>%
+  #create a column called contribution to store mentions in the corpus x value
+  mutate(contribution = n * value) |> 
+  arrange(desc(abs(contribution))) |> 
+  mutate(item2 = reorder(item2, contribution)) 
+ 
+main_characters_plot <- main_characters_sentiment |> 
+  group_by(item1) |> 
+  summarise(total_contribution = sum(contribution))
+
+```
+
+And now we **plot it:**
+
+```{r}
+ggplot(main_characters_plot, aes(x = item1, y = total_contribution, fill = item1)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Contribution for Main Characters",
+       x = "Character", y = "Total Contribution",
+       fill = "Character") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("harry" = "dodgerblue3", "hermione" = "deeppink3", "ron" = "darkolivegreen4"))
+
+```
+
+The words that most frequently co-appear with the names of each of the characters are quite negative, yet we should be expecing this by now given that the series in general is very negative. We can see that Harry has a startingly low score, which in reality makes sense given that he is the main character and the one that almost all villians want to kill.
+
+#### Pairwise correlation
+
+**Correlation** among words indicates how often they appear nearby [relative to]{.underline} how often they appear separately.
+
+When looking at a corpus, the Phi coefficient measures **how likely it is that two words appear together taking into account the probability for each word of appearing alone**.
+
+To perfom this analysis the **pairwise_cor()** function is used instead:
+
+```{r}
+#Now I want to perform an analysis on all the books so I remove the book filter
+HP_section_words <- harry_potter_books |> 
+  mutate(section = wordcount %/% 100) |> 
+  filter(section > 0) |> 
+  filter(!word %in% stop_words$word)
+
+#And apply the pairwise_cor function to obtain correlations
+word_cors <- HP_section_words %>%
+  group_by(word) %>%
+  filter(n() >= 20) %>%
+  pairwise_cor(word, section, sort = TRUE)
+
+word_cors
+```
+
+Here [only regular stopwords have been filtered.]{.underline}
+
+Let´s try to see the most correlated words with four words that are quite common across the books. Now I will **plot it:**
+
+```{r}
+word_cors |> 
+  #we define a vector for 4 words
+  filter(item1 %in% c("wand", "voldemort", "dumbledore", "death")) |> 
+  #we group by item1
+  group_by(item1) |> 
+  #we use the first 6 most correlated
+  slice_max(correlation, n = 7) |> 
+  ungroup() |> 
+  #we reorder item2 regarding its correlation
+  mutate(item2 = reorder(item2, correlation)) |> 
+  #we plot
+  ggplot(aes(item2, correlation, fill=item1)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ item1, scales = "free") +
+  coord_flip()
+```
+
+This can be interpreted as follows:
+
+-   **Death** is correlated with Death Eaters, indicating strong association with dark forces. Also correlated with Voldemort and a curse and prophecy, suggesting involvement in significant plot elements.
+
+-   **Dumbledore** is correlated with his own first name (Albus), but also with headmaster" and "voldemort," reflecting his role as Hogwarts' headmaster and his conflicts with Voldemort.
+
+-   **Voldemort** is correlated with "voldemort's," "lord,"highlighting possessions and dark magical connotation. Also correlated with "death" and "dumbledore," indicating his responsibility for Dumbledore´s death.
+
+-   **Wand** is correlated with actions like "raised" and "flew," suggesting activities related to wand usage. Also with features like "tip" and "elder," reflecting characteristics of wands.
+
+**Also, we can visualize the correlations in a plot:**
+
+```{r}
+set.seed(2016)
+
+word_cors %>%
+  filter(correlation > 0.5) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = FALSE) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+```
+
+This is an alternative way of visualising the previously explained plot.
+
+#### Top words associated to the characters
+
+First I wanted to filter some expressions that are to me like stopwords common to the way of speaking of each of the main characters:
+
+```{r}
+characters_stop_words <- bind_rows(tibble(word = c("ron's", "harry's", "d'you", "bit", "yeah", "hermione's", "dunno", "reckon", "thinking", "ing"),  
+                                      lexicon = c("characters")), 
+                               stop_words)
+
+```
+
+Once this is done we can plot the **words for the main characters**:
+
+```{r}
+word_cors |> 
+   # Filter out stopwords
+  filter(!item1 %in% characters_stop_words$word, !item2 %in% characters_stop_words$word) |> 
+  #we define a vector for 4 words
+  filter(item1 %in% c("harry", "hermione", "ron")) |> 
+  #we group by item1
+  group_by(item1) |> 
+  #we use the first 6 most correlated
+  slice_max(correlation, n = 15) |> 
+  ungroup() |> 
+  #we reorder item2 regarding its correlation
+  mutate(item2 = reorder(item2, correlation)) %>%
+  #we plot
+  ggplot(aes(item2, correlation, fill=item1)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ item1, scales = "free") +
+  coord_flip()+ 
+  labs(fill = "Character")  # Change legend title
+```
+
+Here the interpretation gets more interesting:
+
+-   The top word for each of the characters reveals the "love triangle" that characterises the saga. Although it is not really a love triangle, Harry´s bestfriend is Ron since the beginning but then Hermione and Ron develop a thing for each other. This is crystallised in Harry having Ron but Ron and Hermione having each other instead as main words.
+
+-   **Harry**´s main words are related to other characters (such as Slughorn, Dobby ,Malfoy or Ginny - his lover-) and to dramatic words related to the main story such as scar, yelled, feeling or uncle
+
+-   **Ron**´s main words are related to his siblings (Fred, Ginny and George), to Scrabbers (his rat) and to Griffyndor and the activities he developed there (homework, breakfast...)
+
+-   **Hermione**´s words are related to school stuff (homework, lesson, library, class, dean...) which reveal that she was a good student.
+
+#### Keywords in context
+
+Actually, this search can be better done with the kwic() function from the ***quanteda*** package, which puts certain keywords in context. We can use the books directly with this function, so especially in the first, second and fourth book it is talked about the houses, so let´s put together these books and analyse the context of the houses:
+
+```{r}
+houses_texts <- c(
+    philosophers_stone,
+    chamber_of_secrets,
+    goblet_of_fire
+)
+
+# Combine all the texts into a single string
+houses_texts <- paste(houses_texts, collapse = " ")
+
+```
+
+**Context analysis of the houses:**
+
+First we prepare the window of 10 words for each house and then bind them into a single tibble:
+
+```{r}
+gryffindor <- kwic(houses_texts, "gryffindor",valuetype="regex", window=10)
+hufflepuff <- kwic(houses_texts, "hufflepuff", valuetype="regex", window=10)
+ravenclaw <- kwic(houses_texts, "ravenclaw",valuetype="regex", window=10)
+slytherin <- kwic(houses_texts, "slytherin", valuetype="regex",window=10)
+
+```
+
+Combine into a single tibble:
+
+```{r}
+library(dplyr)
+
+# Combine the vectors into a single tibble
+houses_tibble <- bind_rows(
+  gryffindor %>% as_tibble(),
+  hufflepuff %>% as_tibble(),
+  ravenclaw %>% as_tibble(),
+  slytherin %>% as_tibble()
+)
+
+houses_tibble <- houses_tibble |> 
+  #unite the text before and after the word with the word
+  unite(text, pre, keyword, post, sep = " ", remove = FALSE) |> 
+  #remove irrelevant variables
+  select(-docname, -from, -to, -pre, -keyword, -post)
+
+```
+
+Create a corpus object:
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(tidytext)
+library(ggplot2)
+
+# Step 1: Perform sentiment analysis
+sentiment_analysis <- houses_tibble %>%
+  unnest_tokens(word, text) %>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(pattern) %>%
+  summarise(sentiment_score = mean(value)) %>%
+  ungroup()
+
+# Step 2: Join the sentiment analysis results with the original tibble
+houses_tibble <- left_join(houses_tibble, sentiment_analysis, by = "pattern")
+
+# Step 4: Plot the sentiment scores for each house
+ggplot(sentiment_analysis, aes(x = pattern, y = sentiment_score, fill = pattern)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Sentiment Analysis by Harry Potter House",
+       x = "House",
+       y = "Average Sentiment Score") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+The sentiment analysis by Harry Potter house reveals varying degrees of positivity associated with each house.
+
+**Hufflepuff** emerges with the highest sentiment score of 0.687, indicating a predominantly positive sentiment, likely reflecting qualities such as loyalty and inclusivity.
+
+**Gryffindor** follows with a score of 0.506, suggesting a moderately positive sentiment attributed to bravery and heroism.
+
+**Slytherin** and **Ravenclaw** both exhibit moderately positive sentiments, with scores of 0.283 and 0.282, respectively. These scores may reflect the ambitious and cunning nature of Slytherin, as well as the intelligence and wit of Ravenclaw students.
+
+To sum up, while each house demonstrates positive sentiments, Hufflepuff stands out as the most positively perceived house in this analysis, yet this could be subject to the characters associated with each house, which play a significant role in shaping perceptions and it is precisely the three main characters the ones that encounter the most problems subject to negative connotation or sentiment.
+
+## Topic modelling
+
+To make some topic modelling and better understand the content of the saga it is necessary to convert our harry potter dataframe into a DMT to later use the [`LDA()`](https://rdrr.io/pkg/topicmodels/man/lda.html) function from the topicmodels package to create a seven-topic LDA model (one per book).
+
+Prepare the Harry Potter Books dataframe:
+
+```{r}
+#design the stopwords to be filtered for topic modelling
+topic_stop_words <- bind_rows(tibble(word = c("top", "well", "led", "harry", "ron", "hermione", "weasley", "professor", "potter", "harry's",  "madam", "madame", "looked", "dumbledore", "yeah"),  
+                                      lexicon = c("topic_modelling")), 
+                               stop_words)
+```
+
+```{r}
+library(tm)
+#select the dataset that has the necessary variables for creating the DTM
+harry_potter_dtm <- book_words |> 
+  select(book, word, n)|>  #data1 
+  anti_join(topic_stop_words, join_by(word))#data2, which is the just designed custom stop words that also filters main characters names
+
+# Define the order of the books
+book_order <- c(
+  "Philosopher's Stone", "Chamber of Secrets", "Prisoner of Azkaban",
+  "Goblet of Fire", "Order of the Phoenix", "Half-Blood Prince", "Deathly Hallows"
+)
+
+# Convert book names to numbers based on the specified order
+book_to_number <- function(book_name) {
+  match(book_name, book_order)
+}
+
+# Rename columns and convert book names to numbers
+harry_potter_dtm_formatted <- harry_potter_dtm %>%
+  mutate(
+    document = book_to_number(book),
+    term = word,
+    count = n
+  ) %>%
+  select(document, term, count)
+
+
+harry_potter_dtm <- harry_potter_dtm_formatted %>%
+  #we use the cast function with the three columns needed
+  cast_dtm(document, term, count)
+
+harry_potter_dtm
+```
+
+Quite **low sparsity**, meaning it uses more or less the same vocabulary across the whole saga
+
+Now we fit the LDA model. I will choose 2 topics despite the fact that there are 7 books, but it is a saga and they all are tightly related:
+
+```{r}
+harry_potter_lda <- LDA(harry_potter_dtm, k = 2, control = list(seed = 1234))
+harry_potter_lda
+```
+
+And now we tidy it back:
+
+```{r}
+harry_potter_topics <- tidy(harry_potter_lda)
+```
+
+Let's find the 5 most common words for each topic and plot them.
+
+```{r}
+top_terms <- harry_potter_topics |> 
+  group_by(topic) |> 
+  slice_max(beta, n = 15) |> 
+  ungroup() |> 
+  arrange(topic, -beta)
+
+top_terms
+```
+
+```{r}
+top_terms |> 
+  mutate(term = reorder_within(term, beta, topic)) |> 
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+
+It seems like there is just a single topic as many terms belong to both topics modeled and also terms in both topics are quite related, therefore there is nothing distinctive of them.
+
+This could be due to the low sparsity of the saga, but it gives us a reason to say that it is an easy to follow saga with many iterations across all of the books.
+
+Finally, and although the analysis has been interpreted "on the go", it can indeed be concluded that the sentiment of the saga becomes more negative as the story unfolds.
+
+![](images/clipboard-4132460565.png)
